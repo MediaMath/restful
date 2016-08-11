@@ -8,6 +8,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var test = &foo{98}
@@ -16,10 +19,6 @@ func TestGetResponse(t *testing.T) {
 	count := int32(0)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&count, 1)
-		accept := r.Header.Get("Accept")
-		if accept != "accept1, accept2" {
-			http.Error(w, fmt.Sprintf("accept: %v", accept), http.StatusBadRequest)
-		}
 
 		resp := &foo{18}
 		b, err := json.Marshal(resp)
@@ -33,44 +32,49 @@ func TestGetResponse(t *testing.T) {
 	defer ts.Close()
 
 	fooResponse := &foo{}
-	err := testClient(t, ts.URL).DoJSON(NewGetRequest("unit-test", "", "accept1", "accept2"), test, fooResponse)
-	if err != nil {
-		t.Fatal(err)
-	}
+	status, _, err := New(tstClient()).DoJSON(tstRequest(t, ts.URL), fooResponse)
+	c := atomic.LoadInt32(&count)
 
-	if fooResponse.Foo != 18 {
-		t.Fatalf("ERR: %v", fooResponse)
-	}
-
-	if count > 1 {
-		t.Fatal(count)
-	}
+	require.Nil(t, err)
+	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, 18, fooResponse.Foo)
+	assert.Equal(t, int32(1), c)
 }
 
 func TestDontBackoff400Responses(t *testing.T) {
 	count := int32(0)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&count, 1)
-		if atomic.LoadInt32(&count) > 1 {
-			t.Fatal("Retried too much")
-		}
-
 		http.Error(w, "foo", http.StatusTeapot)
 	}))
 	defer ts.Close()
 
-	err := testClient(t, ts.URL).DoJSON(NewGetRequest("unittest", ""), test, &foo{})
-	if err == nil {
-		t.Fatal("No error")
-	}
-
+	status, _, err := WithBackoff(New(tstClient()), newCountBackOff(500), nil).DoJSON(tstRequest(t, ts.URL), &foo{})
 	c := atomic.LoadInt32(&count)
-	if c != 1 {
-		t.Fatalf("wrong backoff: %v", c)
-	}
+
+	assert.NotNil(t, err)
+	assert.Equal(t, int32(1), c)
+	assert.Equal(t, http.StatusTeapot, status)
 }
 
-func TestBackoffNon400Responses(t *testing.T) {
+func TestDontBackoff200ResponsesIfErrors(t *testing.T) {
+	count := int32(0)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&count, 1)
+		//is a 200 but we cant parse it
+		fmt.Fprintln(w, "Hello, client")
+	}))
+	defer ts.Close()
+
+	status, _, err := WithBackoff(New(tstClient()), newCountBackOff(500), nil).DoJSON(tstRequest(t, ts.URL), &foo{})
+	c := atomic.LoadInt32(&count)
+
+	assert.NotNil(t, err)
+	assert.Equal(t, int32(1), c)
+	assert.Equal(t, http.StatusOK, status)
+}
+
+func TestBackoff500Responses(t *testing.T) {
 	count := int32(0)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&count, 1)
@@ -82,56 +86,21 @@ func TestBackoffNon400Responses(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := testClient(t, ts.URL)
-
 	notified := int32(0)
-	client.BackOffNotify = func(e error, t time.Duration) { atomic.AddInt32(&notified, 1) }
+	notify := func(e error, t time.Duration) { atomic.AddInt32(&notified, 1) }
 
-	err := client.DoJSON(NewGetRequest("unittest", ""), test, &foo{})
-	if err == nil {
-		t.Errorf("Didn't error")
-	}
-
+	status, _, err := WithBackoff(New(tstClient()), newCountBackOff(4), notify).DoJSON(tstRequest(t, ts.URL), &foo{})
 	c := atomic.LoadInt32(&count)
-	if c != 4 {
-		t.Errorf("wrong backoff: %v", c)
-	}
-
 	n := atomic.LoadInt32(&notified)
-	if n != 3 {
-		t.Errorf("wrong notify: %v", n)
-	}
+
+	assert.NotNil(t, err)
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, int32(4), c)
+	assert.Equal(t, int32(3), n)
 }
 
-func TestExpectedResponseCodeUnparseableBody(t *testing.T) {
-	count := int32(0)
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&count, 1)
-		fmt.Fprintln(w, "Hello, client")
-	}))
-	defer ts.Close()
-
-	err := testClient(t, ts.URL).DoJSON(NewPostRequest("unittest", "", ""), test, &foo{})
-
-	if err == nil {
-		t.Fatal("no error")
-	}
-
-	c := atomic.LoadInt32(&count)
-	if c > 1 {
-		t.Fatalf("don't backoff unparseable: %v", c)
-	}
-}
-
-func TestRequestError(t *testing.T) {
-	_, err := DefaultClient("h%ttp%")
-	if err == nil {
-		t.Fatal("No error")
-	}
-}
-
-func newCountBackOff(max int) BackOff {
-	return &countBackoff{max: max}
+func newCountBackOff(max int) CreateBackOff {
+	return func() BackOff { return &countBackoff{max: max} }
 }
 
 type countBackoff struct {
@@ -145,14 +114,17 @@ func (b *countBackoff) Stop() (bool, time.Duration) {
 	return b.count == b.max, time.Millisecond
 }
 
-func testClient(t *testing.T, url string) *Client {
-	client, err := DefaultClient(url)
-	if err != nil {
-		t.Fatal(err)
+func tstClient() *http.Client {
+	return &http.Client{Timeout: time.Duration(time.Second)}
+}
+
+func tstRequest(t testing.TB, url string) *http.Request {
+	req, requestError := http.NewRequest("GET", url, nil)
+	if requestError != nil {
+		t.Fatalf("Request error: %v", requestError)
 	}
 
-	client.CreateBackOff = func() BackOff { return newCountBackOff(4) }
-	return client
+	return req
 }
 
 type foo struct {

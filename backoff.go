@@ -14,16 +14,6 @@ type BackOff interface {
 	Stop() (bool, time.Duration)
 }
 
-//NoBackOff doesn't backoff at all, it fails immediately
-var NoBackOff = b(0)
-
-type b int
-
-func (r b) Reset() {}
-func (r b) Stop() (bool, time.Duration) {
-	return true, time.Second
-}
-
 /*
 	Wrapper around any of the backoff policies in github.com/cenk/backoff/BackOff
 	func WrapBackoff(b backoff.BackOff) restful.BackOff {
