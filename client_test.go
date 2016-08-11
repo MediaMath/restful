@@ -8,8 +8,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/cenk/backoff"
 )
 
 var test = &foo{98}
@@ -132,7 +130,7 @@ func TestRequestError(t *testing.T) {
 	}
 }
 
-func newCountBackOff(max int) backoff.BackOff {
+func newCountBackOff(max int) BackOff {
 	return &countBackoff{max: max}
 }
 
@@ -142,13 +140,9 @@ type countBackoff struct {
 }
 
 func (b *countBackoff) Reset() { b.count = 0 }
-func (b *countBackoff) NextBackOff() time.Duration {
-	if b.count == b.max-1 {
-		return backoff.Stop
-	}
-
+func (b *countBackoff) Stop() (bool, time.Duration) {
 	b.count++
-	return time.Duration(1) * time.Millisecond
+	return b.count == b.max, time.Millisecond
 }
 
 func testClient(t *testing.T, url string) *Client {
@@ -157,7 +151,7 @@ func testClient(t *testing.T, url string) *Client {
 		t.Fatal(err)
 	}
 
-	client.CreateBackOff = func() backoff.BackOff { return newCountBackOff(4) }
+	client.CreateBackOff = func() BackOff { return newCountBackOff(4) }
 	return client
 }
 
