@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"time"
-
-	"github.com/cenk/backoff"
 )
 
 //DefaultClient will return a restful client that uses the Default http Client, does not backoff and doesnt report stats
@@ -22,7 +20,7 @@ func DefaultClient(URL string) (*Client, error) {
 
 	return &Client{
 		Client:        http.DefaultClient,
-		CreateBackOff: func() backoff.BackOff { return &backoff.StopBackOff{} },
+		CreateBackOff: func() BackOff { return NoBackOff },
 		BackOffNotify: nil,
 		BaseURL:       u,
 		Stats:         NilStats,
@@ -32,8 +30,8 @@ func DefaultClient(URL string) (*Client, error) {
 //Client does backed off calls to a json producing http service
 type Client struct {
 	Client        *http.Client
-	CreateBackOff func() backoff.BackOff
-	BackOffNotify backoff.Notify
+	CreateBackOff CreateBackOff
+	BackOffNotify Notify
 	BaseURL       *url.URL
 	Stats         Stats
 }
@@ -66,7 +64,6 @@ func (r *Client) DoJSON(request *Request, data interface{}, response interface{}
 
 	b := r.CreateBackOff()
 	b.Reset()
-	var next time.Duration
 	for {
 		var reader io.Reader
 		if data != nil {
@@ -119,7 +116,8 @@ func (r *Client) DoJSON(request *Request, data interface{}, response interface{}
 			err = unexpected
 		}
 
-		if next = b.NextBackOff(); next == backoff.Stop {
+		stop, next := b.Stop()
+		if stop {
 			return err
 		}
 
