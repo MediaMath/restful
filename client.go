@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-//DefaultClient will return a restful client that uses the Default http Client, does not backoff and doesnt report stats
+//DefaultClient will return a restful client that uses the Default http Client, does not backoff and doesn't report stats
 func DefaultClient(URL string) (*Client, error) {
 	u, err := url.Parse(URL)
 	if err != nil {
@@ -53,7 +53,7 @@ func (r *Client) DoJSON(request *Request, data interface{}, response interface{}
 		}
 	}
 
-	//copy url before modifying it
+	//copy URL before modifying it
 	u, err := url.Parse(r.BaseURL.String())
 	if err != nil {
 		return err

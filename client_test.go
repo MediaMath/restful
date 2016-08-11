@@ -89,7 +89,7 @@ func TestBackoffNon400Responses(t *testing.T) {
 
 	err := client.DoJSON(NewGetRequest("unittest", ""), test, &foo{})
 	if err == nil {
-		t.Errorf("Didnt error")
+		t.Errorf("Didn't error")
 	}
 
 	c := atomic.LoadInt32(&count)
@@ -119,7 +119,7 @@ func TestExpectedResponseCodeUnparseableBody(t *testing.T) {
 
 	c := atomic.LoadInt32(&count)
 	if c > 1 {
-		t.Fatalf("dont backoff unparseable: %v", c)
+		t.Fatalf("don't backoff unparseable: %v", c)
 	}
 }
 

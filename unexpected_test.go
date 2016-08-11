@@ -23,7 +23,7 @@ func TestIsUnexpectedOnNil(t *testing.T) {
 func TestIsUnexpectedOnUnexpected(t *testing.T) {
 	e := IsUnexpectedResponseError(&UnexpectedResponseError{})
 	if e == nil {
-		t.Fatal("Wasnt error")
+		t.Fatal("Wasn't error")
 	}
 }
 
