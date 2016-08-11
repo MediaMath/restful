@@ -15,8 +15,8 @@ func main() {
     client, _ := restful.DefaultClient("http://example.com")
 
     fooResponse := &foo{}
-    //Post a get request to the base url/foos that with accept headers accept1 and accept2 and expects a json
-    //response {"foo":98}
+    //Make a get request to the base url/foos that will accept headers accept1 and accept2
+    //JSON response = {"foo":98}
     err := client.DoJSON(restful.NewGetRequest("unit-test", "foos", "accept1", "accept2"), nil, fooResponse)
 
     if err != nil || fooResponse.Foo != 98 {
