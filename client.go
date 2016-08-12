@@ -1,145 +1,138 @@
 package restful
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"net/http"
-	"net/url"
 	"time"
 )
 
-//DefaultClient will return a restful client that uses the Default http Client, does not backoff and doesn't report stats
-func DefaultClient(URL string) (*Client, error) {
-	u, err := url.Parse(URL)
-	if err != nil {
-		return nil, err
+//DoJSON will parse the body of a request response as json
+func DoJSON(restful Restful, request *http.Request, response interface{}) (status int, body []byte, err error) {
+	var res *http.Response
+
+	res, err = restful.Do(request)
+	if err == nil {
+		body, err = ioutil.ReadAll(res.Body)
+		res.Body.Close()
+		status = res.StatusCode
 	}
 
-	return &Client{
-		Client:        http.DefaultClient,
-		CreateBackOff: func() BackOff { return NoBackOff },
-		BackOffNotify: nil,
-		BaseURL:       u,
-		Stats:         NilStats,
-	}, nil
-}
-
-//Client does backed off calls to a json producing http service
-type Client struct {
-	Client        *http.Client
-	CreateBackOff CreateBackOff
-	BackOffNotify Notify
-	BaseURL       *url.URL
-	Stats         Stats
-}
-
-//DoJSON will attempt to do the provided request with the configured backoff.  The response will be unmarshalled into response argument
-func (r *Client) DoJSON(request *Request, data interface{}, response interface{}) error {
-	if r.Stats == nil {
-		r.Stats = NilStats
+	if err == nil && response != nil {
+		err = json.Unmarshal(body, response)
 	}
 
-	statName := func(name string) string { return fmt.Sprintf("%s.%s", request.Name, name) }
+	return
+}
 
-	var err error
-	var body []byte
-	if data != nil {
-		body, err = json.Marshal(data)
-		if err != nil {
-			return err
+//Restful takes an http request and an optional response json struct
+type Restful interface {
+	Do(request *http.Request) (response *http.Response, err error)
+}
+
+//WithExpectedResult will error if the response status is not the provided one
+func WithExpectedResult(r Restful, expected int) Restful {
+	return &expectedResponse{r, expected}
+}
+
+//WithStats collects stats while it does the JSON
+func WithStats(r Restful, stats Stats, requestName string) Restful {
+	return &statsCollected{r, stats, requestName}
+}
+
+//WithBackoff will use the provided backoff policy
+func WithBackoff(r Restful, b CreateBackOff, n Notify) Restful {
+	return &backoff{r, b, n}
+}
+
+type expectedResponse struct {
+	Restful
+	expected int
+}
+
+func (r *expectedResponse) Do(request *http.Request) (response *http.Response, err error) {
+	response, err = r.Restful.Do(request)
+
+	if response != nil && response.StatusCode != r.expected {
+		err = &UnexpectedResponseError{
+			Expected: r.expected,
+			Received: response.StatusCode,
 		}
 	}
 
-	//copy URL before modifying it
-	u, err := url.Parse(r.BaseURL.String())
+	return
+}
+
+//Stats is an interface for reporting statistics
+type Stats interface {
+	Incr(string)
+	TimingPeriod(string, time.Time, time.Time)
+}
+
+type statsCollected struct {
+	Restful
+	stats       Stats
+	requestName string
+}
+
+func (r *statsCollected) Do(request *http.Request) (response *http.Response, err error) {
+	start := time.Now()
+	response, err = r.Restful.Do(request)
+	end := time.Now()
+
+	r.stats.Incr(r.statName("request"))
+
 	if err != nil {
-		return err
+		r.stats.Incr(r.statName("request_error"))
 	}
 
-	u.Path = request.Path
-	u.RawQuery = request.Query
+	if response != nil {
+		r.stats.TimingPeriod(r.statName("get_time"), start, end)
+		r.stats.Incr(r.statName(fmt.Sprintf("response.%v", response.StatusCode)))
+	}
 
+	return
+}
+
+func (r *statsCollected) statName(name string) string {
+	return fmt.Sprintf("%s.%s", r.requestName, name)
+}
+
+type backoff struct {
+	Restful
+	CreateBackOff CreateBackOff
+	BackOffNotify Notify
+}
+
+func (r *backoff) Do(request *http.Request) (response *http.Response, err error) {
 	b := r.CreateBackOff()
 	b.Reset()
 	for {
-		var reader io.Reader
-		if data != nil {
-			reader = bytes.NewBuffer(body)
-		}
-		req, requestError := http.NewRequest(request.Method, u.String(), reader)
-
-		if request.Accept != "" {
-			req.Header.Add("Accept", request.Accept)
-		}
-
-		if request.ContentType != "" {
-			req.Header.Add("Content-Type", request.ContentType)
-		}
-
-		//request error indicates a bad URL or something, don't bother with trying/retrying
-		if requestError != nil {
-			r.Stats.Incr(statName("request_format_error"))
-			return requestError
-		}
-
-		start := time.Now()
-		status, body, err := r.do(req)
-		end := time.Now()
+		response, err = r.Restful.Do(request)
 
 		if err == nil {
-			r.Stats.TimingPeriod(statName("get_time"), start, end)
-			r.Stats.Incr(statName(fmt.Sprintf("response.%v", status)))
-			unexpected := validateExpectedResponse(request.ExpectedStatus, status, body)
-			if unexpected == nil {
-				//You are likely pointing at the wrong thing if you got the expected response
-				//but couldn't parse it.  Go ahead and don't retry
-				if response != nil {
-					if e := json.Unmarshal(body, response); e != nil {
-						r.Stats.Incr(statName("request_error"))
-						return fmt.Errorf("Cannot unmarshal response body: %v: %s", e, body)
-					}
-				}
+			return
+		}
 
-				r.Stats.Incr(statName("request"))
-				return nil
-			}
-
-			//Don't retry 400s
-			if unexpected.IsClientRequestError() {
-				r.Stats.Incr(statName("request_error"))
-				return unexpected
-			}
-
-			err = unexpected
+		//only backoff on server errors
+		if response != nil && !isServerError(response.StatusCode) {
+			return
 		}
 
 		stop, next := b.Stop()
 		if stop {
-			return err
+			return
 		}
 
 		if r.BackOffNotify != nil {
 			r.BackOffNotify(err, next)
 		}
 
-		r.Stats.Incr(statName("backoff"))
 		time.Sleep(next)
 	}
 }
 
-func (r *Client) do(req *http.Request) (status int, body []byte, err error) {
-
-	var res *http.Response
-	res, err = r.Client.Do(req)
-	if err == nil {
-		body, err = ioutil.ReadAll(res.Body)
-		res.Body.Close()
-
-		status = res.StatusCode
-	}
-
-	return
+func isServerError(status int) bool {
+	return status >= http.StatusInternalServerError
 }

@@ -12,15 +12,13 @@ func main() {
         Foo int `json:"foo"`
     }
 
-    client, _ := restful.DefaultClient("http://example.com")
+    client := restful.WithExpectedResult(http.DefaultClient, http.StatusOK)
 
     fooResponse := &foo{}
-    //Make a get request to the base url/foos that will accept headers accept1 and accept2
-    //JSON response = {"foo":98}
-    err := client.DoJSON(restful.NewGetRequest("unit-test", "foos", "accept1", "accept2"), nil, fooResponse)
+    status, body, err := restful.DoJSON(client, http.NewRequest("GET", "http://example.com", nil), fooResponse)
 
     if err != nil || fooResponse.Foo != 98 {
-	log.Fatal("Incorrect")
+	log.Fatal("Incorrect", status, body, err)
     }
 }
 ```

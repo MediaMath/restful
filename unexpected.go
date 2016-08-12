@@ -1,36 +1,15 @@
 package restful
 
-import (
-	"fmt"
-	"net/http"
-)
+import "fmt"
 
 //UnexpectedResponseError indicates that the request happened correctly but the response was unexpected
 type UnexpectedResponseError struct {
 	Expected int
 	Received int
-	Body     []byte
-}
-
-//IsClientRequestError is true if the received status is in the 400s
-func (u *UnexpectedResponseError) IsClientRequestError() bool {
-	return u.Received >= http.StatusBadRequest && u.Received < http.StatusInternalServerError
 }
 
 func (u *UnexpectedResponseError) Error() string {
-	return fmt.Sprintf("%v:%v:%s", u.Expected, u.Received, u.Body)
-}
-
-func validateExpectedResponse(expected int, status int, body []byte) *UnexpectedResponseError {
-	if expected != status {
-		return &UnexpectedResponseError{
-			Expected: expected,
-			Received: status,
-			Body:     body,
-		}
-	}
-
-	return nil
+	return fmt.Sprintf("%v:%v", u.Expected, u.Received)
 }
 
 //IsUnexpectedResponseError will return the error as a UnexpectedResponseError struct or nil
