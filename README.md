@@ -12,10 +12,10 @@ func main() {
         Foo int `json:"foo"`
     }
 
-    client := restful.New(http.DefaultClient)
+    client := restful.WithExpectedResult(http.DefaultClient, http.StatusOK)
 
     fooResponse := &foo{}
-    status, body, err := client.DoJSON(http.NewRequest("GET", "http://example.com", nil), fooResponse)
+    status, body, err := restful.DoJSON(client, http.NewRequest("GET", "http://example.com", nil), fooResponse)
 
     if err != nil || fooResponse.Foo != 98 {
 	log.Fatal("Incorrect", status, body, err)
