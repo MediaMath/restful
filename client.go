@@ -8,14 +8,27 @@ import (
 	"time"
 )
 
-//Restful takes an http request and an optional response json struct
-type Restful interface {
-	DoJSON(request *http.Request, response interface{}) (status int, body []byte, err error)
+//DoJSON will parse the body of a request response as json
+func DoJSON(restful Restful, request *http.Request, response interface{}) (status int, body []byte, err error) {
+	var res *http.Response
+
+	res, err = restful.Do(request)
+	if err == nil {
+		body, err = ioutil.ReadAll(res.Body)
+		res.Body.Close()
+		status = res.StatusCode
+	}
+
+	if err == nil && response != nil {
+		err = json.Unmarshal(body, response)
+	}
+
+	return
 }
 
-//New creates a basic Restful with the provided http client
-func New(client *http.Client) Restful {
-	return &base{client}
+//Restful takes an http request and an optional response json struct
+type Restful interface {
+	Do(request *http.Request) (response *http.Response, err error)
 }
 
 //WithExpectedResult will error if the response status is not the provided one
@@ -33,40 +46,18 @@ func WithBackoff(r Restful, b CreateBackOff, n Notify) Restful {
 	return &backoff{r, b, n}
 }
 
-type base struct {
-	*http.Client
-}
-
-func (r *base) DoJSON(request *http.Request, response interface{}) (status int, body []byte, err error) {
-	var res *http.Response
-
-	res, err = r.Client.Do(request)
-	if err == nil {
-		body, err = ioutil.ReadAll(res.Body)
-		res.Body.Close()
-		status = res.StatusCode
-	}
-
-	if err == nil && response != nil {
-		err = json.Unmarshal(body, response)
-	}
-
-	return
-}
-
 type expectedResponse struct {
 	Restful
 	expected int
 }
 
-func (r *expectedResponse) DoJSON(request *http.Request, response interface{}) (status int, body []byte, err error) {
-	status, body, err = r.Restful.DoJSON(request, response)
+func (r *expectedResponse) Do(request *http.Request) (response *http.Response, err error) {
+	response, err = r.Restful.Do(request)
 
-	if status != r.expected {
+	if response != nil && response.StatusCode != r.expected {
 		err = &UnexpectedResponseError{
 			Expected: r.expected,
-			Received: status,
-			Body:     body,
+			Received: response.StatusCode,
 		}
 	}
 
@@ -85,9 +76,9 @@ type statsCollected struct {
 	requestName string
 }
 
-func (r *statsCollected) DoJSON(request *http.Request, response interface{}) (status int, body []byte, err error) {
+func (r *statsCollected) Do(request *http.Request) (response *http.Response, err error) {
 	start := time.Now()
-	status, body, err = r.Restful.DoJSON(request, response)
+	response, err = r.Restful.Do(request)
 	end := time.Now()
 
 	r.stats.Incr(r.statName("request"))
@@ -96,9 +87,9 @@ func (r *statsCollected) DoJSON(request *http.Request, response interface{}) (st
 		r.stats.Incr(r.statName("request_error"))
 	}
 
-	if status > 0 {
+	if response != nil {
 		r.stats.TimingPeriod(r.statName("get_time"), start, end)
-		r.stats.Incr(r.statName(fmt.Sprintf("response.%v", status)))
+		r.stats.Incr(r.statName(fmt.Sprintf("response.%v", response.StatusCode)))
 	}
 
 	return
@@ -114,18 +105,18 @@ type backoff struct {
 	BackOffNotify Notify
 }
 
-func (r *backoff) DoJSON(request *http.Request, response interface{}) (status int, body []byte, err error) {
+func (r *backoff) Do(request *http.Request) (response *http.Response, err error) {
 	b := r.CreateBackOff()
 	b.Reset()
 	for {
-		status, body, err = r.Restful.DoJSON(request, response)
+		response, err = r.Restful.Do(request)
 
 		if err == nil {
 			return
 		}
 
 		//only backoff on server errors
-		if !isServerError(status) {
+		if response != nil && !isServerError(response.StatusCode) {
 			return
 		}
 

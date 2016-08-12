@@ -6,11 +6,10 @@ import "fmt"
 type UnexpectedResponseError struct {
 	Expected int
 	Received int
-	Body     []byte
 }
 
 func (u *UnexpectedResponseError) Error() string {
-	return fmt.Sprintf("%v:%v:%s", u.Expected, u.Received, u.Body)
+	return fmt.Sprintf("%v:%v", u.Expected, u.Received)
 }
 
 //IsUnexpectedResponseError will return the error as a UnexpectedResponseError struct or nil

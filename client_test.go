@@ -32,7 +32,7 @@ func TestGetResponse(t *testing.T) {
 	defer ts.Close()
 
 	fooResponse := &foo{}
-	status, _, err := New(tstClient()).DoJSON(tstRequest(t, ts.URL), fooResponse)
+	status, _, err := DoJSON(tstClient(), tstRequest(t, ts.URL), fooResponse)
 	c := atomic.LoadInt32(&count)
 
 	require.Nil(t, err)
@@ -49,15 +49,16 @@ func TestDontBackoff400Responses(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	status, _, err := WithBackoff(New(tstClient()), newCountBackOff(500), nil).DoJSON(tstRequest(t, ts.URL), &foo{})
+	resp, err := WithBackoff(WithExpectedResult(tstClient(), http.StatusOK), newCountBackOff(500), nil).Do(tstRequest(t, ts.URL))
 	c := atomic.LoadInt32(&count)
 
 	assert.NotNil(t, err)
 	assert.Equal(t, int32(1), c)
-	assert.Equal(t, http.StatusTeapot, status)
+	require.NotNil(t, resp)
+	assert.Equal(t, http.StatusTeapot, resp.StatusCode)
 }
 
-func TestDontBackoff200ResponsesIfErrors(t *testing.T) {
+func TestDontBackoff200ResponsesIfExpected(t *testing.T) {
 	count := int32(0)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&count, 1)
@@ -66,12 +67,12 @@ func TestDontBackoff200ResponsesIfErrors(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	status, _, err := WithBackoff(New(tstClient()), newCountBackOff(500), nil).DoJSON(tstRequest(t, ts.URL), &foo{})
+	response, err := WithBackoff(WithExpectedResult(tstClient(), 200), newCountBackOff(500), nil).Do(tstRequest(t, ts.URL))
 	c := atomic.LoadInt32(&count)
 
-	assert.NotNil(t, err)
+	assert.Nil(t, err)
 	assert.Equal(t, int32(1), c)
-	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, http.StatusOK, response.StatusCode)
 }
 
 func TestBackoff500Responses(t *testing.T) {
@@ -89,12 +90,12 @@ func TestBackoff500Responses(t *testing.T) {
 	notified := int32(0)
 	notify := func(e error, t time.Duration) { atomic.AddInt32(&notified, 1) }
 
-	status, _, err := WithBackoff(New(tstClient()), newCountBackOff(4), notify).DoJSON(tstRequest(t, ts.URL), &foo{})
+	response, err := WithBackoff(WithExpectedResult(tstClient(), http.StatusOK), newCountBackOff(4), notify).Do(tstRequest(t, ts.URL))
 	c := atomic.LoadInt32(&count)
 	n := atomic.LoadInt32(&notified)
 
 	assert.NotNil(t, err)
-	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, http.StatusInternalServerError, response.StatusCode)
 	assert.Equal(t, int32(4), c)
 	assert.Equal(t, int32(3), n)
 }
