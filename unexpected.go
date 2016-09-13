@@ -1,5 +1,9 @@
 package restful
 
+//Copyright 2016 MediaMath <http://www.mediamath.com>.  All rights reserved.
+//Use of this source code is governed by a BSD-style
+//license that can be found in the LICENSE file.
+
 import "fmt"
 
 //UnexpectedResponseError indicates that the request happened correctly but the response was unexpected
