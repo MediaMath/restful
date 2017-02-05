@@ -40,6 +40,12 @@ func WithExpectedResult(r Restful, expected int) Restful {
 	return &expectedResponse{r, expected}
 }
 
+//WithStatsV2 collects stats in a better way while it does the JSON
+func WithStatsV2(r Restful, stats StatsV2) Restful {
+	return &statsV2Collected{r, stats}
+
+}
+
 //WithStats collects stats while it does the JSON
 func WithStats(r Restful, stats Stats, requestName string) Restful {
 	return &statsCollected{r, stats, requestName}
@@ -63,6 +69,39 @@ func (r *expectedResponse) Do(request *http.Request) (response *http.Response, e
 			Expected: r.expected,
 			Received: response.StatusCode,
 		}
+	}
+
+	return
+}
+
+//StatsV2 is an interface for reporting statistics, it is more explicit than the v1 interface
+type StatsV2 interface {
+	OnRequest()
+	OnError(err error)
+	Timing(hadError bool, start time.Time, end time.Time)
+	OnResponse(statusCode int)
+}
+
+type statsV2Collected struct {
+	Restful
+	stats StatsV2
+}
+
+func (r *statsV2Collected) Do(request *http.Request) (response *http.Response, err error) {
+	start := time.Now()
+	response, err = r.Restful.Do(request)
+	end := time.Now()
+
+	r.stats.OnRequest()
+
+	if err != nil {
+		r.stats.OnError(err)
+	}
+
+	r.stats.Timing(err != nil, start, end)
+
+	if response != nil {
+		r.stats.OnResponse(response.StatusCode)
 	}
 
 	return
